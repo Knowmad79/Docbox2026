@@ -1,12 +1,20 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import Column, String, DateTime, Float, Boolean, Text, Integer, ForeignKey
+from sqlalchemy import Column, String, DateTime, Float, Boolean, Text, Integer, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import os
+from dotenv import load_dotenv
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
-# Database URL - use SQLite for local dev, PostgreSQL for production
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./docboxrx.db")
+# Database URL - use environment variables
+env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required")
 
 # Convert postgres:// to postgresql+asyncpg:// for async support
 if DATABASE_URL.startswith("postgres://"):
@@ -14,11 +22,20 @@ if DATABASE_URL.startswith("postgres://"):
 elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+connect_args = {}
+if DATABASE_URL.startswith("postgresql+asyncpg://"):
+    parts = urlsplit(DATABASE_URL)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    sslmode = query.pop("sslmode", None)
+    if sslmode and sslmode.lower() == "require":
+        connect_args["ssl"] = True
+    DATABASE_URL = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
 # For SQLite, we need aiosqlite
 if DATABASE_URL.startswith("sqlite"):
     engine = create_async_engine(DATABASE_URL, echo=False)
 else:
-    engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+    engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args=connect_args)
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -58,6 +75,35 @@ class Message(Base):
     corrected_at = Column(DateTime, nullable=True)
     source_id = Column(String, nullable=True)
     source_name = Column(String, nullable=True)
+    
+    # Nylas integration fields
+    grant_id = Column(String, nullable=True, index=True)  # Link to Nylas grant
+    provider_message_id = Column(String, nullable=True, index=True)  # Original message ID from provider
+    thread_id = Column(String, nullable=True, index=True)  # Email thread ID
+    provider = Column(String, nullable=True)  # google, microsoft, etc.
+    
+    # Full email content
+    raw_body = Column(Text, nullable=True)  # Full plain text body
+    raw_body_html = Column(Text, nullable=True)  # Full HTML body
+    raw_headers = Column(Text, nullable=True)  # Raw email headers
+    
+    # Metadata and attachments
+    email_metadata = Column(JSON, nullable=True)  # Additional metadata
+    attachments = Column(JSON, nullable=True)  # Attachment info
+    has_attachments = Column(Boolean, default=False)
+    
+    # Status and tracking
+    status = Column(String, default='active')  # active, archived, deleted
+    read = Column(Boolean, default=False)
+    starred = Column(Boolean, default=False)
+    important = Column(Boolean, default=False)
+    
+    # AI processing fields
+    summary = Column(Text, nullable=True)  # AI-generated summary
+    recommended_action = Column(String, nullable=True)  # AI-recommended action
+    action_type = Column(String, nullable=True)  # reply, forward, call, etc.
+    draft_reply = Column(Text, nullable=True)  # Auto-generated reply draft
+    llm_fallback = Column(Boolean, default=False)  # Whether LLM fallback was used
     
     user = relationship("User", back_populates="messages")
 
@@ -113,6 +159,29 @@ class CloudMailinMessage(Base):
     corrected = Column(Boolean, default=False)
     source_id = Column(String, default="cloudmailin")
     source_name = Column(String, default="CloudMailin")
+
+class Webhook(Base):
+    __tablename__ = "webhooks"
+    
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    grant_id = Column(String, nullable=True, index=True)  # Link to specific Nylas grant
+    webhook_url = Column(String, nullable=False)  # External webhook URL
+    webhook_secret = Column(String, nullable=True)  # Secret for verification
+    events = Column(JSON, nullable=True)  # List of events to subscribe to
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_triggered = Column(DateTime, nullable=True)
+    trigger_count = Column(Integer, default=0)
+    
+    # Processing metadata
+    webhook_filters = Column(JSON, nullable=True)  # Event filters
+    webhook_headers = Column(JSON, nullable=True)  # Custom headers to send
+    
+    user = relationship("User", back_populates="webhooks")
+
+# Add webhooks relationship to User
+User.webhooks = relationship("Webhook", back_populates="user", cascade="all, delete-orphan")
 
 async def init_db():
     async with engine.begin() as conn:

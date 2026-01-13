@@ -573,6 +573,7 @@ def get_nylas_grants_by_user(user_id: str) -> list:
             ORDER BY created_at DESC
         ''', (user_id,))
         rows = cursor.fetchall()
+        release_connection(conn)
         return [_sanitize_grant_row(dict(row)) for row in rows]
     finally:
         release_connection(conn)
@@ -588,6 +589,7 @@ def get_nylas_grant_by_grant_id(grant_id: str) -> dict | None:
             WHERE grant_id = ?
         ''', (grant_id,))
         row = cursor.fetchone()
+        release_connection(conn)
         return _sanitize_grant_row(dict(row)) if row else None
     finally:
         release_connection(conn)
@@ -622,6 +624,7 @@ def get_all_nylas_grant_credentials() -> list:
         cursor = conn.cursor()
         cursor.execute('SELECT grant_id, user_id, email, provider, access_token, refresh_token, expires_at, token_type, scope FROM nylas_grants')
         rows = cursor.fetchall()
+        release_connection(conn)
         results = []
         for row in rows:
             data = dict(row)
@@ -641,6 +644,7 @@ def update_nylas_grant_sync_time(grant_id: str, last_sync_at: str):
         cursor = conn.cursor()
         cursor.execute('UPDATE nylas_grants SET last_sync_at = ? WHERE grant_id = ?', (last_sync_at, grant_id))
         conn.commit()
+        release_connection(conn)
     finally:
         release_connection(conn)
 
@@ -688,6 +692,7 @@ def delete_nylas_grant(grant_id: str, user_id: str) -> bool:
         cursor.execute('DELETE FROM nylas_grants WHERE grant_id = ? AND user_id = ?', (grant_id, user_id))
         deleted = cursor.rowcount > 0
         conn.commit()
+        release_connection(conn)
         return deleted
     finally:
         release_connection(conn)

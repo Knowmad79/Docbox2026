@@ -21,15 +21,29 @@ from email.parser import BytesParser
 from cerebras.cloud.sdk import Cerebras
 from nylas import Client as NylasClient
 import asyncio
+from sqlalchemy.exc import IntegrityError
 
 # Import database module
 from app import db
+from app.routers.briefing import router as briefing_router
+from app.routers.ops import router as ops_router
+from app.routers.api_contract import router as api_contract_router
+from app.services.vectorizer import vectorizer, EmailInput
+from app.services.router import router as pony_express
+from app.models.state_vector import MessageStateVector
+from app.database import async_session
 
 # Nylas configuration
-NYLAS_API_KEY = os.environ.get("NYLAS_API_KEY", "nyk_v0_lPt52DfSYzutwat78WlItFejHHj2MyyZQPm1pHYQcmHO5gDWb6pIAwTanwZpHhkM")
-NYLAS_CLIENT_ID = os.environ.get("NYLAS_CLIENT_ID", "ec54cf83-8648-4e04-b547-3de100de9b48")
+NYLAS_API_KEY = os.environ.get("NYLAS_API_KEY")
+if not NYLAS_API_KEY:
+    raise ValueError("NYLAS_API_KEY environment variable is required")
+
+NYLAS_CLIENT_ID = os.environ.get("NYLAS_CLIENT_ID")
+if not NYLAS_CLIENT_ID:
+    raise ValueError("NYLAS_CLIENT_ID environment variable is required")
+
 NYLAS_API_URI = os.environ.get("NYLAS_API_URI", "https://api.us.nylas.com")
-NYLAS_CALLBACK_URI = os.environ.get("NYLAS_CALLBACK_URI", "https://app-nkizyevt.fly.dev/api/nylas/callback")
+NYLAS_CALLBACK_URI = os.environ.get("NYLAS_CALLBACK_URI", "https://app.docboxrx.com/api/nylas/callback")
 
 nylas_client = NylasClient(api_key=NYLAS_API_KEY, api_uri=NYLAS_API_URI) if NYLAS_API_KEY else None
 
@@ -38,7 +52,7 @@ nylas_grant_cache: dict[str, dict] = {}
 nylas_grant_cache_lock = threading.Lock()
 
 # Cerebras API for LLM fallback
-CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY")
 cerebras_client = Cerebras(api_key=CEREBRAS_API_KEY) if CEREBRAS_API_KEY else None
 LLM_CONFIDENCE_THRESHOLD = 0.70  # Use LLM if rules confidence is below this
 
@@ -57,26 +71,94 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"detail": "; ".join(errors) if errors else "Validation error", "errors": exc.errors()}
     )
 
-# CORS configuration - allow all origins for development
+# CORS configuration - allow Vite dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=[
+        "http://localhost:5173",  # Vite dev server
+    ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],  # Explicit methods
-    allow_headers=["*"],  # Allow all headers
-    expose_headers=["*"],  # Expose all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
+app.include_router(briefing_router)
+app.include_router(ops_router)
+app.include_router(api_contract_router)
+
+
 @app.on_event("startup")
-async def preload_nylas_grants() -> None:
+async def initialize_system() -> None:
+    """Initialize database and preload Nylas grants at startup."""
+    # Initialize database schema (idempotent)
+    db.init_db()
+    db.create_state_vector_tables()
+
+    # Preload Nylas grants if client is available
     if not nylas_client:
         return
     for grant in db.get_all_nylas_grant_credentials():
         _cache_nylas_grant(grant)
 
+
+async def process_shadow_traffic(grant_id: str, message_id: str) -> None:
+    print(f"Shadow Worker: Waking up for message {message_id}...")
+
+    if not nylas_client:
+        print("ERROR: Shadow Worker Failed: Nylas not configured")
+        return
+
+    try:
+        nylas_message = await asyncio.to_thread(nylas_client.messages.find, grant_id, message_id)
+
+        subject = getattr(nylas_message, 'subject', None) or (nylas_message.get('subject') if isinstance(nylas_message, dict) else None) or "No Subject"
+        body_raw = getattr(nylas_message, 'body', None) or (nylas_message.get('body') if isinstance(nylas_message, dict) else None)
+        body_html = getattr(nylas_message, 'body_html', None) or (nylas_message.get('body_html') if isinstance(nylas_message, dict) else None)
+        body_content = body_html or body_raw or "No Body"
+
+        sender = "unknown"
+        from_value = getattr(nylas_message, 'from_', None) or (nylas_message.get('from') if isinstance(nylas_message, dict) else None)
+        if from_value and isinstance(from_value, (list, tuple)):
+            first = from_value[0]
+            if isinstance(first, dict):
+                sender = first.get('email') or first.get('name') or sender
+            else:
+                sender = getattr(first, 'email', None) or getattr(first, 'name', None) or sender
+
+        email_input = EmailInput(
+            subject=subject,
+            body=body_content,
+            sender=sender,
+            message_id=message_id,
+            grant_id=grant_id,
+        )
+
+        print(f"Vectorizing: {email_input.subject[:30]}...")
+        vector_data = await vectorizer.vectorize_email(email_input)
+        routed_data = pony_express.route_vector(vector_data)
+
+        async with async_session() as session:
+            db_obj = MessageStateVector(**routed_data)
+            session.add(db_obj)
+            try:
+                await session.commit()
+                await session.refresh(db_obj)
+                print(f"SUCCESS: Shadow Success! Saved Vector ID: {db_obj.id} | Risk: {db_obj.risk_score}")
+            except IntegrityError:
+                await session.rollback()
+                print(f"WARNING: Shadow Duplicate: Vector already exists for Nylas message {message_id}")
+            except Exception as e:
+                await session.rollback()
+                print(f"ERROR: DB Save Failed: {e}")
+
+    except Exception as e:
+        print(f"ERROR: Shadow Worker Failed: {e}")
+
 # Security
-SECRET_KEY = "docboxrx-secret-key-change-in-production"
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable is required")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
@@ -1638,6 +1720,58 @@ async def sync_nylas_emails(grant_id: str, limit: int = 50, current_user: dict =
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+
+
+@app.get("/api/nylas/webhook")
+async def nylas_webhook_challenge(challenge: Optional[str] = None):
+    """Handle Nylas webhook challenge verification."""
+    if challenge:
+        return challenge
+    return {"status": "ok"}
+
+
+@app.post("/api/nylas/webhook")
+async def nylas_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Receive Nylas message.created events and trigger Shadow Worker."""
+    data = await request.json()
+
+    deltas = data.get("deltas") if isinstance(data, dict) else None
+    if isinstance(deltas, list):
+        for delta in deltas:
+            if not isinstance(delta, dict):
+                continue
+            if delta.get("type") != "message.created":
+                continue
+            obj_data = delta.get("object_data") or {}
+            if not isinstance(obj_data, dict):
+                continue
+            msg_id = obj_data.get("id")
+            grant_id = obj_data.get("grant_id")
+            if msg_id and grant_id:
+                print(f"🔔 Webhook Received: New Message {msg_id}")
+                background_tasks.add_task(process_shadow_traffic, grant_id, msg_id)
+
+    return {"status": "success"}
+
+
+@app.post("/api/nylas/webhook/test")
+async def nylas_shadow_test(
+    grant_id: str,
+    message_id: str,
+    repeat: int = 1,
+    current_user: dict = Depends(get_current_user),
+):
+    """Test endpoint to trigger Shadow Worker manually (authenticated)."""
+    if repeat < 1:
+        repeat = 1
+    if repeat > 50:
+        repeat = 50
+
+    for _ in range(repeat):
+        await process_shadow_traffic(grant_id, message_id)
+
+    return {"status": "ok", "repeat": repeat, "grant_id": grant_id, "message_id": message_id}
+
 
 class SendReplyRequest(BaseModel):
     message_id: str
