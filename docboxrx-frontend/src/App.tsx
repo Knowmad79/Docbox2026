@@ -10,10 +10,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { AlertTriangle, Clock, Calendar, Archive, Mail, Plus, LogOut, Zap, RefreshCw, Trash2, Bot, Check, Clock3, Copy, X } from 'lucide-react'
+import { AlertTriangle, Clock, Calendar, Archive, Mail, Plus, LogOut, Zap, RefreshCw, Trash2, Bot, Check, Clock3, Copy, X, LayoutGrid } from 'lucide-react'
+import MorningBrief from './components/MorningBrief'
+import EmailDetail from './components/EmailDetail'
+import './components/EmailDetail.css'
 
 // API URL - use environment variable or default to deployed backend
-const API_URL = import.meta.env.VITE_API_URL || 'https://app-nkizyevt.fly.dev'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 // Log API URL for debugging
 console.log('API_URL:', API_URL)
@@ -74,6 +77,10 @@ const zoneConfig: Record<ZoneType, { label: string; icon: React.ReactNode; color
   LATER: { label: 'FYI', icon: <Archive className="w-3 h-3" />, color: 'text-zinc-400', pillBg: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30' }
 }
 
+const asZoneType = (zone: unknown): ZoneType => {
+  return zone === 'STAT' || zone === 'TODAY' || zone === 'THIS_WEEK' || zone === 'LATER' ? zone : 'LATER'
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
@@ -86,10 +93,12 @@ function App() {
   const [connectedEmails, setConnectedEmails] = useState<string[]>([])
   const [ingestForm, setIngestForm] = useState({ sender: '', subject: '', snippet: '' })
   const [ingestOpen, setIngestOpen] = useState(false)
+  const [viewMode, setViewMode] = useState<'inbox' | 'decision-deck'>('inbox')
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null)
   const [replyComposerOpen, setReplyComposerOpen] = useState(false)
   const [replyText, setReplyText] = useState('')
   const [fullEmailContent, setFullEmailContent] = useState<{raw_body?: string, raw_body_html?: string} | null>(null)
+  const [showEmailDetail, setShowEmailDetail] = useState(false)
   const [newZone, setNewZone] = useState<ZoneType>('TODAY')
   const [actionCenter, setActionCenter] = useState<ActionCenter | null>(null)
   const [activeTab, setActiveTab] = useState<'all' | ZoneType>('all')
@@ -610,7 +619,6 @@ function App() {
                               const data = await response.json()
                               if (data.auth_url) {
                                 // Store user_id in localStorage temporarily for callback
-                                const tempUserId = loginForm.email // Use email as temp identifier
                                 localStorage.setItem('temp_user_email', loginForm.email)
                                 window.location.href = data.auth_url
                               }
@@ -659,6 +667,15 @@ function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button 
+            variant={viewMode === 'decision-deck' ? 'default' : 'outline'} 
+            size="sm" 
+            onClick={() => setViewMode(viewMode === 'inbox' ? 'decision-deck' : 'inbox')}
+            className={viewMode === 'decision-deck' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'}
+          >
+            <LayoutGrid className="w-4 h-4 mr-1" />
+            {viewMode === 'decision-deck' ? 'Inbox' : 'Decision Deck'}
+          </Button>
           <Button variant="outline" size="sm" onClick={seedDemoData} disabled={loading} className="bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"><Zap className="w-4 h-4 mr-1" />Demo</Button>
           <Dialog open={ingestOpen} onOpenChange={setIngestOpen}>
             <DialogTrigger asChild><Button size="sm" className="bg-emerald-600 hover:bg-emerald-700"><Plus className="w-4 h-4 mr-1" />Add Email</Button></DialogTrigger>
@@ -687,7 +704,7 @@ function App() {
                         <div key={m.id} className="p-3 mb-2 bg-zinc-800 border border-zinc-700 rounded-lg flex items-start justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              <Badge className={`text-xs px-1.5 py-0 border ${zoneConfig[m.zone].pillBg}`}>{zoneConfig[m.zone].label}</Badge>
+                              <Badge className={`text-xs px-1.5 py-0 border ${zoneConfig[asZoneType(m.zone)].pillBg}`}>{zoneConfig[asZoneType(m.zone)].label}</Badge>
                               <div className="text-xs text-zinc-400 truncate">{m.sender}</div>
                               <div className="text-xs text-zinc-600 ml-2">{new Date(m.received_at).toLocaleString()}</div>
                             </div>
@@ -712,7 +729,7 @@ function App() {
               </div>
             </DialogContent>
           </Dialog>
-          <Button variant="outline" size="sm" onClick={fetchMessages} disabled={loading} className="bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></Button>
+          <Button variant="outline" size="sm" onClick={() => fetchMessages()} disabled={loading} className="bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></Button>
           <Button variant="ghost" size="sm" onClick={handleLogout} className="text-zinc-400 hover:text-zinc-100"><LogOut className="w-4 h-4" /></Button>
         </div>
       </header>
@@ -758,10 +775,13 @@ function App() {
         </div>
       )}
 
-      {/* Main Content - Two Pane */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Pane - Message List */}
-        <div className="w-96 border-r border-zinc-800 flex flex-col bg-zinc-900/50">
+      {/* Main Content - Conditional View */}
+      {viewMode === 'decision-deck' ? (
+        <MorningBrief />
+      ) : (
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left Pane - Message List */}
+          <div className="w-96 border-r border-zinc-800 flex flex-col bg-zinc-900/50">
           {/* Filter Tabs */}
           <div className="p-2 border-b border-zinc-800 flex gap-1 overflow-x-auto">
             <Button variant={activeTab === 'all' ? 'default' : 'ghost'} size="sm" onClick={() => setActiveTab('all')} className={activeTab === 'all' ? 'bg-zinc-700' : 'text-zinc-400'}>All ({allMessages.length})</Button>
@@ -781,7 +801,7 @@ function App() {
               </div>
             ) : (
               filteredMessages.map((msg) => (
-                <div key={msg.id} onClick={() => setSelectedMessage(msg)} className={`p-3 border-b border-zinc-800 cursor-pointer hover:bg-zinc-800/50 transition-colors ${selectedMessage?.id === msg.id ? 'bg-zinc-800 border-l-2 border-l-emerald-500' : ''}`}>
+                <div key={msg.id} onClick={() => { setSelectedMessage(msg); setShowEmailDetail(true); }} className={`p-3 border-b border-zinc-800 cursor-pointer hover:bg-zinc-800/50 transition-colors ${selectedMessage?.id === msg.id ? 'bg-zinc-800 border-l-2 border-l-emerald-500' : ''}`}>
                   <div className="flex items-center gap-2 mb-1">
                     <Badge className={`text-xs px-1.5 py-0 border ${zoneConfig[msg.zone].pillBg}`}>{zoneConfig[msg.zone].label}</Badge>
                     <span className="text-xs text-zinc-500 truncate flex-1">{msg.sender}</span>
@@ -799,6 +819,16 @@ function App() {
         <div className="flex-1 flex flex-col overflow-hidden">
           {selectedMessage ? (
             <>
+              {/* Email Detail Modal */}
+              {showEmailDetail && (
+                <EmailDetail
+                  subject={selectedMessage.subject}
+                  from={selectedMessage.sender}
+                  date={new Date(selectedMessage.received_at).toLocaleString()}
+                  html={fullEmailContent?.raw_body_html || ''}
+                  onClose={() => setShowEmailDetail(false)}
+                />
+              )}
               {/* Email Header */}
               <div className="p-4 border-b border-zinc-800 bg-zinc-900/30">
                 <div className="flex items-start justify-between gap-4">
@@ -826,14 +856,10 @@ function App() {
                 <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
                   <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-3">Email Content</h3>
                   {fullEmailContent?.raw_body_html ? (
-                    <div 
-                      className="text-sm text-zinc-300 leading-relaxed prose prose-invert max-w-none"
-                      dangerouslySetInnerHTML={{ __html: fullEmailContent.raw_body_html }}
-                      style={{ 
-                        wordWrap: 'break-word',
-                        overflowWrap: 'break-word'
-                      }}
-                    />
+                    <div className="text-sm text-zinc-300 leading-relaxed prose prose-invert max-w-none">
+                      <Button size="sm" className="mb-2 bg-blue-700 hover:bg-blue-800 text-white" onClick={() => setShowEmailDetail(true)}>Open Full HTML View</Button>
+                      <div className="mt-2" dangerouslySetInnerHTML={{ __html: fullEmailContent.raw_body_html }} />
+                    </div>
                   ) : (
                     <div className="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">
                       {fullEmailContent?.raw_body || selectedMessage.raw_body || selectedMessage.snippet || 'Loading full email content...'}
@@ -926,6 +952,7 @@ function App() {
           )}
         </div>
       </div>
+      )}
 
       {/* Integrated Reply Composer Modal */}
       <Dialog open={replyComposerOpen} onOpenChange={setReplyComposerOpen}>
