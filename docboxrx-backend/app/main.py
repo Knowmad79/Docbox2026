@@ -75,7 +75,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",  # Vite dev server
+        "https://docbox26.netlify.app",
+        "http://localhost:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],

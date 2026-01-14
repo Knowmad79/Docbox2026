@@ -27,7 +27,8 @@ Login/registration shows "Failed to fetch" - cannot connect to backend.
 
 ---
 
-## 🧪 Testing Steps
+ # Should return:
+ {"status": "healthy", "service": "DocBoxRX API"}
 
 ### Step 1: Check Backend is Running
 ```bash
@@ -46,107 +47,85 @@ https://app-nkizyevt.fly.dev/health
    - `✅ Backend connection successful` or `❌ Backend connection failed`
 
 ### Step 3: Check Network Tab
-1. Open browser (F12)
 2. Go to Network tab
 3. Try to login
 4. Look for:
    - Request to `https://app-nkizyevt.fly.dev/api/auth/login`
    - Status code (200 = success, 404 = not found, etc.)
-   - CORS errors (red)
-
 ---
 
 ## 🐛 Common Issues
 
-### Issue 1: Backend Not Running
+ # Check backend status
 **Symptoms:**
-- "Failed to fetch" error
+ # Restart backend if needed
 - Network tab shows "Failed" or "CORS error"
 
-**Fix:**
+ # Redeploy backend if necessary
 ```bash
 # Check Fly.io status
 flyctl status --app app-nkizyevt
 
-# Restart if needed
-flyctl restart --app app-nkizyevt
 
 # Or redeploy
-cd docboxrx-backend
-flyctl deploy
 ```
 
-### Issue 2: CORS Error
+ # Set correct API URL in frontend .env file
 **Symptoms:**
 - Browser console shows CORS error
 - Network tab shows OPTIONS request failed
 
-**Fix:**
-- Backend CORS is configured correctly
 - Check if backend is actually running
 - Verify `allow_origins=["*"]` in main.py
-
-### Issue 3: Wrong API URL
-**Symptoms:**
-- Console shows wrong URL
 - Requests going to localhost instead of Fly.io
-
 **Fix:**
 - Check console: `API_URL: https://app-nkizyevt.fly.dev`
 - If wrong, set environment variable:
   ```bash
   # In frontend .env file:
-  VITE_API_URL=https://app-nkizyevt.fly.dev
+ # Restart backend service
   ```
 
 ### Issue 4: Network/Firewall
 **Symptoms:**
-- Can't reach backend at all
+ # Check backend logs for issues
 - Timeout errors
 
 **Fix:**
 - Check internet connection
 - Check firewall settings
-- Try from different network
+ # Test health endpoint
 - Test backend directly: `curl https://app-nkizyevt.fly.dev/health`
-
+ # Test login endpoint
 ---
 
-## 🔧 Quick Fixes
 
 ### Fix 1: Rebuild Frontend
 ```bash
 cd docboxrx-frontend
 npm run build
-# Upload dist/ folder
-```
+ # Test backend directly
+ # Test backend directly
 
 ### Fix 2: Restart Backend
 ```bash
 flyctl restart --app app-nkizyevt
-```
-
+ # Check backend status
+ # Check backend logs
 ### Fix 3: Check Backend Logs
 ```bash
-flyctl logs --app app-nkizyevt
 ```
 
 Look for:
 - Server startup messages
-- Error messages
-- Connection issues
-
-### Fix 4: Test Backend Directly
-```bash
 # Test health endpoint
-curl https://app-nkizyevt.fly.dev/health
 
 # Test login endpoint (should return 422 - missing data, but proves it's working)
 curl -X POST https://app-nkizyevt.fly.dev/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
-
+    # Deploy backend with health check
 ---
 
 ## 📊 Diagnostic Checklist

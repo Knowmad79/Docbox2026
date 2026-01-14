@@ -22,15 +22,21 @@ from nylas import Client as NylasClient
 from app import db
 
 # Nylas configuration
-NYLAS_API_KEY = os.environ.get("NYLAS_API_KEY", "nyk_v0_lPt52DfSYzutwat78WlItFejHHj2MyyZQPm1pHYQcmHO5gDWb6pIAwTanwZpHhkM")
-NYLAS_CLIENT_ID = os.environ.get("NYLAS_CLIENT_ID", "ec54cf83-8648-4e04-b547-3de100de9b48")
+NYLAS_API_KEY = os.environ.get("NYLAS_API_KEY")
+if not NYLAS_API_KEY:
+    raise ValueError("NYLAS_API_KEY environment variable is required")
+
+NYLAS_CLIENT_ID = os.environ.get("NYLAS_CLIENT_ID")
+if not NYLAS_CLIENT_ID:
+    raise ValueError("NYLAS_CLIENT_ID environment variable is required")
+
 NYLAS_API_URI = os.environ.get("NYLAS_API_URI", "https://api.us.nylas.com")
-NYLAS_CALLBACK_URI = os.environ.get("NYLAS_CALLBACK_URI", "https://app-nkizyevt.fly.dev/api/nylas/callback")
+NYLAS_CALLBACK_URI = os.environ.get("NYLAS_CALLBACK_URI", "https://app.docboxrx.com/api/nylas/callback")
 
 nylas_client = NylasClient(api_key=NYLAS_API_KEY, api_uri=NYLAS_API_URI) if NYLAS_API_KEY else None
 
 # Cerebras API for LLM fallback
-CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY")
 cerebras_client = Cerebras(api_key=CEREBRAS_API_KEY) if CEREBRAS_API_KEY else None
 LLM_CONFIDENCE_THRESHOLD = 0.70  # Use LLM if rules confidence is below this
 
@@ -46,7 +52,10 @@ app.add_middleware(
 )
 
 # Security
-SECRET_KEY = "docboxrx-secret-key-change-in-production"
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable is required")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 

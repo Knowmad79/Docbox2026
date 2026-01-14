@@ -58,21 +58,13 @@ JWT_SECRET=docboxrx-secret-key-change-in-production
 - email (unique)
 - password_hash
 - name
-- practice_name
 - created_at
 
 ### messages
 - id (UUID, PK)
-- user_id (FK -> users)
-- sender, sender_domain, subject, snippet
 - zone (STAT/TODAY/THIS_WEEK/LATER)
 - confidence, reason, jone5_message
-- received_at, classified_at
-- corrected (boolean)
-
-### nylas_grants
 - id (UUID, PK)
-- user_id (FK -> users)
 - grant_id (Nylas grant ID)
 - email
 - provider
@@ -85,23 +77,17 @@ JWT_SECRET=docboxrx-secret-key-change-in-production
 ### Auth
 - `POST /api/auth/register` - Create account
 - `POST /api/auth/login` - Login, returns JWT
-
 ### Messages
 - `GET /api/messages/by-zone` - Get all messages grouped by zone
 - `POST /api/messages/ingest` - Classify email (manual paste)
 - `POST /api/messages/correct` - Move message to different zone
-- `DELETE /api/messages/{id}` - Delete message
 
 ### Nylas (Email Integration)
-- `GET /api/nylas/auth-url?provider=google` - Get OAuth URL (provider: google/microsoft)
 - `GET /api/nylas/callback` - OAuth callback (Nylas redirects here)
 - `GET /api/nylas/grants` - List connected email accounts
-- `POST /api/nylas/sync/{grant_id}` - Sync emails from connected account
 - `DELETE /api/nylas/grants/{grant_id}` - Disconnect email account
 
-### Demo
 - `POST /api/demo/seed` - Load demo data
-
 ---
 
 ## OAuth Flow (Nylas)

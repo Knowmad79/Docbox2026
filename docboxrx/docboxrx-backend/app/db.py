@@ -3,8 +3,11 @@ import os
 from datetime import datetime, timedelta
 
 # Check if we have a PostgreSQL DATABASE_URL
-# Fallback to Neon Postgres if DATABASE_URL is not set in environment
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_Z60uvbwqlBzk@ep-mute-hill-adb7l32q-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require")
+# Fail fast if DATABASE_URL is not set in environment
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required - set in .env (local) or Fly secrets (prod)")
+
 USE_POSTGRES = DATABASE_URL.startswith("postgres")
 
 if USE_POSTGRES:
@@ -554,7 +557,7 @@ def get_action_items(user_id: str) -> dict:
     done_count = done_today['count'] if isinstance(done_today, dict) else done_today[0]
     
     release_connection(conn)
-    
+
     return {
         'urgent_items': urgent_items,
         'needs_reply': needs_reply,
@@ -562,6 +565,3 @@ def get_action_items(user_id: str) -> dict:
         'done_today': done_count,
         'total_action_items': len(urgent_items) + len(snoozed_due)
     }
-
-# Initialize database on import
-init_db()
